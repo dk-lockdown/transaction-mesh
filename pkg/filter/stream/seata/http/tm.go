@@ -119,64 +119,38 @@ func (f *tmStreamFilter) Append(ctx context.Context, headers api.HeaderMap, buf 
 	if protocol.HTTP1 == f.sendHandler.RequestInfo().Protocol() {
 		downStreamHeader := ctx.Value(types.ContextKeyDownStreamHeaders)
 		requestHeader := downStreamHeader.(api.HeaderMap)
-		requestPath, ok := requestHeader.Get(protocol.MosnHeaderPathKey)
-		if ok {
-			conf, found := f.config.FindTMEndPointConfig(requestPath)
-			if found {
-				xid, exists := requestHeader.Get(SEATA_XID)
-				rootCtx := context2.NewRootContext(ctx)
-				if exists {
-					rootCtx.Bind(xid)
-				}
 
-				switch conf.Propagation {
-				case tm.REQUIRED:
-				case tm.REQUIRES_NEW:
-					break
-				case tm.NOT_SUPPORTED:
-					return api.StreamFilterContinue
-				case tm.SUPPORTS:
-					if !exists {
-						return api.StreamFilterContinue
-					}
-					break
-				case tm.NEVER:
-					return api.StreamFilterContinue
-				case tm.MANDATORY:
-					break
-				default:
-					break
-				}
+		xid, exists := requestHeader.Get(SEATA_XID)
+		rootCtx := context2.NewRootContext(ctx)
+		if exists {
+			rootCtx.Bind(xid)
+		}
 
-				streamId := mosnctx.Get(ctx, types.ContextKeyStreamID)
-				requestId := streamId.(uint64)
-				globalTransaction, loaded := f.txMap.Load(requestId)
-				if loaded {
-					tx := globalTransaction.(tm.GlobalTransaction)
+		streamId := mosnctx.Get(ctx, types.ContextKeyStreamID)
+		requestId := streamId.(uint64)
+		globalTransaction, loaded := f.txMap.Load(requestId)
+		if loaded {
+			tx := globalTransaction.(tm.GlobalTransaction)
 
-					if f.sendHandler.RequestInfo().ResponseCode() == http.StatusOK {
-						commitErr := tx.Commit(rootCtx)
-						if commitErr != nil {
-							f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionCommitFailed)
-							f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, commitErr.Error())
-							f.txMap.Delete(requestId)
-							return api.StreamFilterStop
-						}
-					} else {
-						rollbackErr := tx.Rollback(rootCtx)
-						if rollbackErr != nil {
-							f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionRollbackFailed)
-							f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, rollbackErr.Error())
-							f.txMap.Delete(requestId)
-							return api.StreamFilterStop
-						}
-					}
-
+			if f.sendHandler.RequestInfo().ResponseCode() == http.StatusOK {
+				commitErr := tx.Commit(rootCtx)
+				if commitErr != nil {
+					f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionCommitFailed)
+					f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, commitErr.Error())
 					f.txMap.Delete(requestId)
+					return api.StreamFilterStop
 				}
-
-				return api.StreamFilterContinue
+			} else {
+				rollbackErr := tx.Rollback(rootCtx)
+				if rollbackErr != nil {
+					f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionRollbackFailed)
+					f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, rollbackErr.Error())
+					f.txMap.Delete(requestId)
+					return api.StreamFilterStop
+				}
 			}
+
+			f.txMap.Delete(requestId)
 		}
 	}
 	return api.StreamFilterContinue
