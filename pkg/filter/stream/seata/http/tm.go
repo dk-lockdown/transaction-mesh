@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 )
 
 import (
@@ -18,7 +19,7 @@ import (
 )
 
 const SEATA_XID = "SEATA_XID"
-const GLOBAL_TRANSACTION types.ContextKey = 10000
+const GLOBAL_TRANSACTION types.ContextKey = -10000
 
 const (
 	GlobalTransactionBeginFailed    api.ResponseFlag = 0x10001
@@ -30,6 +31,7 @@ type tmStreamFilter struct {
 	receiveHandler api.StreamReceiverFilterHandler
 	sendHandler    api.StreamSenderFilterHandler
 	config         *tmConfig
+	txMap          *sync.Map
 }
 
 func (f *tmStreamFilter) SetReceiveFilterHandler(handler api.StreamReceiverFilterHandler) {
@@ -99,7 +101,9 @@ func (f *tmStreamFilter) OnReceive(ctx context.Context, headers api.HeaderMap, b
 					return api.StreamFilterStop
 				}
 
-				ctx = mosnctx.WithValue(ctx, GLOBAL_TRANSACTION, tx)
+				streamId := mosnctx.Get(ctx, types.ContextKeyStreamID)
+				requestId := streamId.(uint64)
+				f.txMap.Store(requestId, tx)
 				return api.StreamFilterContinue
 			}
 		}
@@ -144,24 +148,33 @@ func (f *tmStreamFilter) Append(ctx context.Context, headers api.HeaderMap, buf 
 					break
 				}
 
-				globalTransaction := mosnctx.Get(ctx, GLOBAL_TRANSACTION)
-				tx := globalTransaction.(tm.GlobalTransaction)
+				streamId := mosnctx.Get(ctx, types.ContextKeyStreamID)
+				requestId := streamId.(uint64)
+				globalTransaction, loaded := f.txMap.Load(requestId)
+				if loaded {
+					tx := globalTransaction.(tm.GlobalTransaction)
 
-				if f.sendHandler.RequestInfo().ResponseCode() == http.StatusOK {
-					commitErr := tx.Commit(rootCtx)
-					if commitErr != nil {
-						f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionCommitFailed)
-						f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, commitErr.Error())
-						return api.StreamFilterStop
+					if f.sendHandler.RequestInfo().ResponseCode() == http.StatusOK {
+						commitErr := tx.Commit(rootCtx)
+						if commitErr != nil {
+							f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionCommitFailed)
+							f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, commitErr.Error())
+							f.txMap.Delete(requestId)
+							return api.StreamFilterStop
+						}
+					} else {
+						rollbackErr := tx.Rollback(rootCtx)
+						if rollbackErr != nil {
+							f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionRollbackFailed)
+							f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, rollbackErr.Error())
+							f.txMap.Delete(requestId)
+							return api.StreamFilterStop
+						}
 					}
-				} else {
-					rollbackErr := tx.Rollback(rootCtx)
-					if rollbackErr != nil {
-						f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionRollbackFailed)
-						f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, rollbackErr.Error())
-						return api.StreamFilterStop
-					}
+
+					f.txMap.Delete(requestId)
 				}
+
 				return api.StreamFilterContinue
 			}
 		}
