@@ -21,8 +21,8 @@ const SEATA_XID = "SEATA_XID"
 const GLOBAL_TRANSACTION types.ContextKey = 10000
 
 const (
-	GlobalTransactionBeginFailed api.ResponseFlag = 0x10001
-	GlobalTransactionCommitFailed api.ResponseFlag = 0x10002
+	GlobalTransactionBeginFailed    api.ResponseFlag = 0x10001
+	GlobalTransactionCommitFailed   api.ResponseFlag = 0x10002
 	GlobalTransactionRollbackFailed api.ResponseFlag = 0x10003
 )
 
@@ -37,12 +37,12 @@ func (f *tmStreamFilter) SetReceiveFilterHandler(handler api.StreamReceiverFilte
 }
 
 func (f *tmStreamFilter) OnReceive(ctx context.Context, headers api.HeaderMap, buf buffer.IoBuffer, trailers api.HeaderMap) api.StreamFilterStatus {
-	if  protocol.HTTP1 == f.receiveHandler.RequestInfo().Protocol() {
-		requestPath,ok := headers.Get(protocol.MosnHeaderPathKey)
+	if protocol.HTTP1 == f.receiveHandler.RequestInfo().Protocol() {
+		requestPath, ok := headers.Get(protocol.MosnHeaderPathKey)
 		if ok {
-			txConf,found := f.config.FindTMEndPointConfig(requestPath)
+			txConf, found := f.config.FindTMEndPointConfig(requestPath)
 			if found {
-				xid,exists := headers.Get(SEATA_XID)
+				xid, exists := headers.Get(SEATA_XID)
 				rootCtx := context2.NewRootContext(ctx)
 				if exists {
 					rootCtx.Bind(xid)
@@ -72,21 +72,21 @@ func (f *tmStreamFilter) OnReceive(ctx context.Context, headers api.HeaderMap, b
 					break
 				case tm.NEVER:
 					if exists {
-						f.receiveHandler.SendHijackReplyWithBody(http.StatusExpectationFailed,headers,
-							fmt.Sprintf("Existing transaction found for transaction marked with propagation 'never',xid = %s",xid))
+						f.receiveHandler.SendHijackReplyWithBody(http.StatusExpectationFailed, headers,
+							fmt.Sprintf("Existing transaction found for transaction marked with propagation 'never',xid = %s", xid))
 						return api.StreamFilterStop
 					} else {
 						return api.StreamFilterContinue
 					}
 				case tm.MANDATORY:
 					if !exists {
-						f.receiveHandler.SendHijackReplyWithBody(http.StatusPreconditionFailed,headers,
+						f.receiveHandler.SendHijackReplyWithBody(http.StatusPreconditionFailed, headers,
 							"No existing transaction found for transaction marked with propagation 'mandatory'")
 						return api.StreamFilterStop
 					}
 					break
 				default:
-					f.receiveHandler.SendHijackReplyWithBody(http.StatusNotImplemented,headers,
+					f.receiveHandler.SendHijackReplyWithBody(http.StatusNotImplemented, headers,
 						fmt.Sprintf("Not Supported Propagation: %s", txConf.Propagation.String()))
 					return api.StreamFilterStop
 				}
@@ -95,11 +95,11 @@ func (f *tmStreamFilter) OnReceive(ctx context.Context, headers api.HeaderMap, b
 				beginErr := tx.BeginWithTimeoutAndName(txConf.TimeOut, txConf.Name, rootCtx)
 				if beginErr != nil {
 					f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionBeginFailed)
-					f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError,headers,beginErr.Error())
+					f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, beginErr.Error())
 					return api.StreamFilterStop
 				}
 
-				ctx = mosnctx.WithValue(ctx,GLOBAL_TRANSACTION,tx)
+				ctx = mosnctx.WithValue(ctx, GLOBAL_TRANSACTION, tx)
 				return api.StreamFilterContinue
 			}
 		}
@@ -112,14 +112,14 @@ func (f *tmStreamFilter) SetSenderFilterHandler(handler api.StreamSenderFilterHa
 }
 
 func (f *tmStreamFilter) Append(ctx context.Context, headers api.HeaderMap, buf buffer.IoBuffer, trailers api.HeaderMap) api.StreamFilterStatus {
-	if  protocol.HTTP1 == f.sendHandler.RequestInfo().Protocol() {
+	if protocol.HTTP1 == f.sendHandler.RequestInfo().Protocol() {
 		downStreamHeader := ctx.Value(types.ContextKeyDownStreamHeaders)
 		requestHeader := downStreamHeader.(api.HeaderMap)
 		requestPath, ok := requestHeader.Get(protocol.MosnHeaderPathKey)
 		if ok {
 			conf, found := f.config.FindTMEndPointConfig(requestPath)
 			if found {
-				xid,exists := requestHeader.Get(SEATA_XID)
+				xid, exists := requestHeader.Get(SEATA_XID)
 				rootCtx := context2.NewRootContext(ctx)
 				if exists {
 					rootCtx.Bind(xid)
@@ -144,21 +144,21 @@ func (f *tmStreamFilter) Append(ctx context.Context, headers api.HeaderMap, buf 
 					break
 				}
 
-				globalTransaction := mosnctx.Get(ctx,GLOBAL_TRANSACTION)
+				globalTransaction := mosnctx.Get(ctx, GLOBAL_TRANSACTION)
 				tx := globalTransaction.(tm.GlobalTransaction)
 
 				if f.sendHandler.RequestInfo().ResponseCode() == http.StatusOK {
 					commitErr := tx.Commit(rootCtx)
 					if commitErr != nil {
 						f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionCommitFailed)
-						f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError,headers,commitErr.Error())
+						f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, commitErr.Error())
 						return api.StreamFilterStop
 					}
 				} else {
 					rollbackErr := tx.Rollback(rootCtx)
 					if rollbackErr != nil {
 						f.receiveHandler.RequestInfo().SetResponseFlag(GlobalTransactionRollbackFailed)
-						f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError,headers,rollbackErr.Error())
+						f.receiveHandler.SendHijackReplyWithBody(http.StatusInternalServerError, headers, rollbackErr.Error())
 						return api.StreamFilterStop
 					}
 				}

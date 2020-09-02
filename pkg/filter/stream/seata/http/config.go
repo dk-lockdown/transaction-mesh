@@ -14,13 +14,13 @@ type tmConfig struct {
 	EndPointConfigs []*tmEndPointConfig `json:"end_point_configs"`
 }
 
-func (c *tmConfig) FindTMEndPointConfig(endpoint string) (*tmEndPointConfig,bool) {
+func (c *tmConfig) FindTMEndPointConfig(endpoint string) (*tmEndPointConfig, bool) {
 	if c.EndPointConfigs != nil && len(c.EndPointConfigs) > 0 {
-		for _,config := range c.EndPointConfigs {
-			if strings.EqualFold(config.BeginEndPoint,endpoint) {
-				return config,true
+		for _, config := range c.EndPointConfigs {
+			if strings.EqualFold(config.BeginEndPoint, endpoint) {
+				return config, true
 			}
 		}
 	}
-	return nil,false
+	return nil, false
 }
